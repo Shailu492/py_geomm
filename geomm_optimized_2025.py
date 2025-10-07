@@ -194,6 +194,13 @@ def main():
     xp_z_trg = z[uniq_trg]
     print(f'Shapes, np_A:{np_A.shape}, xp_x_src:{xp_x_src.shape}, xp_z_trg:{xp_z_trg.shape}')
 
+    print("Pre-computing matrices XtX, ZtZ, and XtAZ...")
+    x_src_np = xp_x_src #.get()  # Get NumPy array from CuPy
+    z_trg_np = xp_z_trg #.get()  # Get NumPy array from CuPy
+
+    XtX = x_src_np.T @ x_src_np
+    ZtZ = z_trg_np.T @ z_trg_np
+    XtAZ = x_src_np.T @ np_A @ z_trg_np
 
     # 1. Define the manifold (this part remains very similar)
     print(f'Before manifold definition')
@@ -212,21 +219,30 @@ def main():
         Defines the cost function using standard NumPy-like operations.
         The variables U1, U2, and B will be passed by the solver.
         """
+        U1 = U1.to(torch.float32)
+        U2 = U2.to(torch.float32)
+        B = B.to(torch.float32)
 
-        # Move to pure torch.
-        cost_x_src = torch.from_numpy(xp_x_src).to(B.device, dtype=torch.float64)
-        cost_z_trg = torch.from_numpy(xp_z_trg).to(B.device, dtype=torch.float64)
-        cost_A = torch.from_numpy(np_A).to(B.device, dtype=torch.float64)
+        # 2. Move pre-computed matrices to the target torch device
+        sXtX = torch.from_numpy(XtX).to(B.device, dtype=torch.float32)
+        sZtZ = torch.from_numpy(ZtZ).to(B.device, dtype=torch.float32)
+        sXtAZ = torch.from_numpy(XtAZ).to(B.device, dtype=torch.float32)
 
-        # Reconstruct the affinity matrix using the variables.
-        # Note: Using '@' for matrix multiplication is cleaner
-        reconstructed_A = (cost_x_src @ U1 @ B @ U2.T) @ cost_z_trg.T
+        # Combine U1, U2, B to form the transformation matrix W
+        W = (U1 @ B) @ U2.T
 
-        # Calculate the two components of the cost.
-        reconstruction_error = torch.sum((reconstructed_A - cost_A) ** 2)
+        # Regularization term (same as before)
         regularization_term = 0.5 * Lambda * torch.sum(B ** 2)
 
-        return reconstruction_error + regularization_term
+        # First part of the cost: Tr(W^T * (X^T*X) * W * (Z^T*Z))
+        # This is the expanded reconstruction error term
+        trace_term = torch.trace((W.T @ sXtX @ W) @ sZtZ)
+
+        # Second part of the cost: -2 * sum(W * (X^T*A*Z))
+        # This is the expanded cross-term between reconstructed and original A
+        correlation_term = -2 * torch.sum(W * sXtAZ)
+
+        return regularization_term + trace_term + correlation_term
 
     # 3. Instantiate the pymanopt problem
     # We pass the manifold and the cost function directly
