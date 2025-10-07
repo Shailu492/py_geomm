@@ -1,0 +1,8 @@
+cupy_cuda12x==13.6.0
+ipdb==0.13.13
+numpy==2.3.3
+pygtrie==2.5.0
+pymanopt==2.2.1
+scipy==1.16.2
+theano==1.0.5
+torch==2.5.1
